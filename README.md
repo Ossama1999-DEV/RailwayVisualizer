@@ -7,9 +7,7 @@ HOUSTON METRORAIL — SWITCH VIEWER AUTOMATIQUE
 4) Dans VS Code : Ctrl+Shift+P > Simple Browser: Show
 5) Entrer : http://127.0.0.1:8767/houston_switches_map.html?line=both
 
-![
-   
-](config/image.png)
+![](config/image.png)
 
 AU DEMARRAGE :
 - update_switches.py recupere les relations OSM Red (1741729), Green (2728566).
