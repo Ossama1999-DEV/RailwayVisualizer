@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RailwayVisualizer — OSM switch explorer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0;font-family:Segoe UI,Arial,sans-serif;background:#0e1726;color:#e9edf7}body{display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:#101b2c;border-bottom:1px solid #2a3a51}h1{font-size:18px;margin:0}small{color:#9bacc3}header small{margin-left:auto}
+main{display:flex;flex:1;min-height:0}.panel{width:330px;min-width:285px;padding:16px;overflow:auto;border-right:1px solid #2a3a51;background:#152238}.panel h2{font-size:13px;color:#9cb5d4;margin:4px 0 9px;text-transform:uppercase;letter-spacing:.06em}.group{margin-bottom:20px}
+label{display:block;font-size:12px;color:#b4c5dc;margin:9px 0 5px}input,select,button{font:inherit}input,select{width:100%;background:#0c182b;color:white;border:1px solid #425675;border-radius:7px;padding:9px;min-width:0}button{background:#2876da;color:white;border:0;border-radius:7px;padding:10px;cursor:pointer;font-weight:600}button:disabled{opacity:.45;cursor:wait}.secondary{background:#283c55}.row{display:flex;gap:7px}.row>*{flex:1}.hint{font-size:12px;color:#b6c5d7;line-height:1.5}.metric{background:#213750;padding:12px;border-radius:8px;margin-bottom:10px}.metric strong{font-size:24px;display:block}.pill{font-size:12px;background:#2b465f;border-radius:8px;padding:6px 9px;display:inline-block}.error{color:#ffb5b5}.success{color:#a2edc6}
+#map{flex:1;min-width:0;min-height:0;background:#e7eef5}.marker{height:24px;width:24px;background:#db334a;color:#fff;border:2px solid #fff;border-radius:50%;font-weight:700;font-size:11px;display:grid;place-items:center;box-shadow:0 1px 5px #0007}a{color:#a3d1ff}footer{font-size:11px;color:#b3c3d7;padding:6px 14px;background:#101b2c}
+@media(max-width:740px){main{flex-direction:column}.panel{width:100%;min-width:0;max-height:47vh;border-right:0;border-bottom:1px solid #2a3a51}#map{min-height:45vh}header small{display:none}}
+</style></head><body>
+<header><h1>🚆 RailwayVisualizer <small>v0.2</small></h1><small>OpenStreetMap · OpenRailwayMap · Python</small></header>
+<main><aside class="panel">
+<div class="group"><h2>1 — Ligne ferroviaire</h2>
+<label for="preset">Exemple ou ligne personnalisée</label><select id="preset"><option value="1741729">Houston — Red Line</option><option value="2728566">Houston — Green Line</option><option value="custom">Autre relation OSM…</option></select>
+<label for="relation">Identifiant de relation OpenStreetMap</label><input id="relation" type="number" min="1" value="1741729">
+<button id="load" style="width:100%;margin-top:10px">Télécharger la ligne et ses switches</button>
+<p class="hint">Pour une autre ville, entre l'identifiant d'une relation <code>route=train</code>, <code>route=tram</code> ou similaire. Les relations <code>route_master</code> ne conviennent pas directement.</p>
+</div>
+<div class="group"><h2>2 — Zone d'affichage</h2><label for="mode">Afficher</label><select id="mode"><option value="full">Toute la ligne</option><option value="segment">Entre deux stations</option></select>
+<div id="stationPanel" hidden><label for="start">Station de départ</label><select id="start"></select><label for="end">Station d'arrivée</label><select id="end"></select><button class="secondary" id="filter" style="width:100%;margin-top:12px">Calculer le tronçon</button><p class="hint">Tronçon estimé à partir du plus court chemin dans les données OSM. Les aiguillages des voies parallèles sont inclus par proximité (35 m), sans garantie d'exhaustivité.</p></div>
+<button class="secondary" id="fit" style="width:100%;margin-top:10px">Centrer la carte</button></div>
+<div class="group"><h2>3 — Résultats</h2><div class="metric"><strong id="count">—</strong><span>Aiguillages visibles</span></div><div class="pill" id="lineName">Aucune ligne chargée</div><p class="hint" id="info"></p><p id="status" class="hint">Choisis une ligne puis clique sur Télécharger.</p><a id="csv" hidden href="#" download>Télécharger le CSV des switches</a></div>
+</aside><div id="map"></div></main>
+<footer>Données issues d'OpenStreetMap (ODbL). Les résultats dépendent de la qualité du relevé OSM, pas d'un inventaire ferroviaire officiel.</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);let activeRoute=null,lastPath=[],shown=[];
+const status=(s,error=false)=>{$('status').textContent=s;$('status').className=error?'hint error':'hint success'};
+if(typeof L==='undefined'){status('Leaflet inaccessible : connexion Internet nécessaire.',true);throw new Error('Leaflet missing')}
+const map=L.map('map',{preferCanvas:true}).setView([29.76,-95.36],12);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+L.tileLayer('https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',{maxZoom:19,opacity:.85,attribution:'© OpenRailwayMap'}).addTo(map);
+const pointLayer=L.layerGroup().addTo(map),pathLayer=L.layerGroup().addTo(map);
+function selectedId(){return $('relation').value.trim()}
+async function send(endpoint,body){const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let answer;try{answer=await res.json()}catch{throw new Error('Réponse invalide du serveur')}if(!res.ok)throw new Error(answer.error||'Erreur réseau');return answer}
+function render(points,path=[]){shown=points;lastPath=path;pointLayer.clearLayers();pathLayer.clearLayers();const bounds=[];points.forEach((p,i)=>{let marker=L.marker([p.lat,p.lon],{icon:L.divIcon({className:'',html:`<span class="marker">${i+1}</span>`,iconSize:[26,26],iconAnchor:[13,13]})});const id=String(p.id);marker.bindPopup(`<b>Switch ${i+1}</b><br>OSM ID: ${id}<br>${p.lat}, ${p.lon}<br><a target="_blank" rel="noopener" href="https://www.openstreetmap.org/node/${encodeURIComponent(id)}">Voir sur OSM</a>`).addTo(pointLayer);bounds.push([p.lat,p.lon])});
+if(path.length>1){L.polyline(path,{color:'#0866dc',weight:5,opacity:.75}).addTo(pathLayer);bounds.push(...path)}$('count').textContent=points.length;if(bounds.length)map.fitBounds(L.latLngBounds(bounds).pad(.08),{maxZoom:17});setTimeout(()=>map.invalidateSize(),200)}
+function setStationOptions(stations){for(let key of ['start','end']){$(key).replaceChildren();for(const s of stations){const opt=document.createElement('option');opt.value=s.id;opt.textContent=s.name;$(key).appendChild(opt)}}if(stations.length>1)$('end').selectedIndex=stations.length-1}
+function syncMode(){const segment=$('mode').value==='segment';$('stationPanel').hidden=!segment;if(!activeRoute)return;if(!segment){render(activeRoute.switches);setCSV('full')}else{status('Choisis les deux stations puis clique sur Calculer le tronçon.') }}
+function setCSV(which){$('csv').hidden=false;$('csv').href=which==='full'?`data/switches_${activeRoute.relation_id}.csv`:`data/segment_${activeRoute.relation_id}.csv`;$('csv').download=which==='full'?`switches_${activeRoute.relation_id}.csv`:`segment_${activeRoute.relation_id}.csv`}
+$('preset').addEventListener('change',()=>{if($('preset').value!=='custom')$('relation').value=$('preset').value});
+$('relation').addEventListener('input',()=>{$('preset').value='custom'});
+$('mode').addEventListener('change',syncMode);
+$('load').addEventListener('click',async()=>{$('load').disabled=true;status('Téléchargement de la relation OSM et extraction des switches…');try{const route=await send('/api/route',{relation_id:selectedId()});activeRoute=route;$('lineName').textContent=`${route.name} · relation ${route.relation_id}`;setStationOptions(route.stations);$('info').textContent=`${route.track_way_count} segments de voie OSM · ${route.stations.length} stations reconnues. ${route.stations.length<2?'Sélection par stations indisponible pour cette relation.':''}`;$('mode').value='full';$('mode').querySelector('[value="segment"]').disabled=route.stations.length<2;syncMode();setCSV('full');status(`${route.count} switches OSM trouvés.`)}catch(e){status(e.message,true)}finally{$('load').disabled=false}});
+$('filter').addEventListener('click',async()=>{if(!activeRoute)return;$('filter').disabled=true;status('Calcul du chemin dans le réseau de voies…');try{const part=await send('/api/segment',{relation_id:activeRoute.relation_id,start:$('start').value,end:$('end').value});render(part.switches,part.path);setCSV('segment');status(`${part.switches.length} switches estimés sur ce tronçon. Chemin OSM ~${(part.distance_m/1000).toFixed(2)} km. Attention : sélection par proximité, pas itinéraire ferroviaire certifié.`)}catch(e){status(e.message,true)}finally{$('filter').disabled=false}});
+$('fit').addEventListener('click',()=>render(shown,lastPath));
+window.addEventListener('resize',()=>map.invalidateSize());
+</script></body></html>
