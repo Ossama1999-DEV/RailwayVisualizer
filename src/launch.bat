@@ -11,7 +11,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo =========================================
-echo        RAILWAY VISUALIZER v0.3
+echo        RAILWAY VISUALIZER v0.4
 echo =========================================
 echo Ouvrir dans VS Code - Simple Browser:
 echo http://127.0.0.1:8767/

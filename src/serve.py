@@ -6,10 +6,12 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse,parse_qs
 from railway import update_route,segment_view,public_route,write_csv,DATA
+from pk import build_reference, pk_view
 
 BASE=Path(__file__).resolve().parent
 CACHE={}
 LOCK=threading.Lock()
+REFERENCES={}
 DEFAULTS={'Houston Red Line':1741729,'Houston Green Line':2728566}
 
 class Handler(SimpleHTTPRequestHandler):
@@ -35,7 +37,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         url=urlparse(self.path)
-        if url.path not in ('/api/route','/api/segment'):
+        if url.path not in ('/api/route','/api/segment','/api/pk/reference','/api/pk/segment'):
             return self.json_response(404,{'error':'Route inconnue'})
         try:
             length=int(self.headers.get('Content-Length','0'))
@@ -51,10 +53,22 @@ class Handler(SimpleHTTPRequestHandler):
                 if url.path=='/api/route':
                     route=update_route(relation_id)
                     CACHE[relation_id]=route
+                    REFERENCES.pop(relation_id, None)
                     return self.json_response(200,public_route(route))
                 route=CACHE.get(relation_id)
                 if route is None:
                     raise ValueError('Charge la ligne avant de choisir un troncon.')
+                if url.path == '/api/pk/reference':
+                    ref = build_reference(route, str(params['start']), str(params['end']))
+                    REFERENCES[relation_id] = ref
+                    return self.json_response(200, ref)
+                if url.path == '/api/pk/segment':
+                    ref = REFERENCES.get(relation_id)
+                    if ref is None:
+                        raise ValueError('Calcule les PK de reference avant de filtrer.')
+                    part = pk_view(ref, params['pk_from'], params['pk_to'])
+                    write_csv(DATA/f'pk_segment_{relation_id}.csv', part['switches'])
+                    return self.json_response(200, part)
                 segment=segment_view(route,str(params['start']),str(params['end']))
                 write_csv(DATA/f'segment_{relation_id}.csv',segment['switches'])
                 return self.json_response(200,segment)
