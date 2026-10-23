@@ -1,7 +1,22 @@
+
+# Python cache
 __pycache__/
 *.py[cod]
+
+# Python virtual environments
 .venv/
-data/*.csv
-data/*.json
-!.gitkeep
+venv/
+
+# Generated CSV and JSON files
+/src/data/*.csv
+/src/data/*.json
+
+# Keep the data directory in Git
+!/src/data/.gitkeep
+
+# VS Code
 .vscode/
+
+# Operating system
+.DS_Store
+Thumbs.db
