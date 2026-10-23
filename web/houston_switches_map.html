@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Houston METRORail - Switches automatiques</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+html,body{margin:0;height:100%;font-family:Segoe UI,Arial,sans-serif;background:#edf2f7;overflow:hidden}
+body{display:flex;flex-direction:column}
+header{box-sizing:border-box;display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:10px 16px;background:#111827;color:#fff;z-index:1000;flex:none}
+h1{font-size:17px;margin:0} .tools{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:13px}
+label{white-space:nowrap;cursor:pointer;display:flex;gap:5px;align-items:center}
+input{accent-color:#5fb7ff}button,a.csv{border:1px solid #526078;background:#283449;color:white;border-radius:5px;padding:6px 9px;text-decoration:none;cursor:pointer;font-size:12px}
+button:hover,a.csv:hover{background:#344664}button:disabled{opacity:.5;cursor:wait}
+#map{flex:1 1 auto;min-height:0;width:100%;position:relative}#message{font-size:12px;color:#cbd5e1}
+.dot{width:25px;height:25px;border-radius:50%;border:2px solid white;box-shadow:0 1px 6px #3338;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:11px}
+.leaflet-popup-content{line-height:1.5} .legend{color:#a6efbd} .red{color:#ff8b96}
+</style>
+</head>
+<body>
+<header>
+  <h1>Houston METRORail · Switches OSM</h1>
+  <div class="tools">
+    <label><input id="red" type="checkbox" checked><span class="red">● Red Line (<span id="redCount">—</span>)</span></label>
+    <label><input id="green" type="checkbox" checked><span class="legend">● Green Line (<span id="greenCount">—</span>)</span></label>
+    <button id="fit" type="button">Zoom sélection</button>
+    <button id="reload" type="button">Relire CSV</button>
+    <button id="refresh" type="button">Actualiser depuis OSM</button>
+    <a class="csv" href="data/switches_red.csv" download>CSV Red</a>
+    <a class="csv" href="data/switches_green.csv" download>CSV Green</a>
+    <span id="message">Chargement des CSV…</span>
+  </div>
+</header>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const state = {red:[], green:[]};
+const visible = new URLSearchParams(location.search).get('line');
+if(visible==='red') $('green').checked=false;
+if(visible==='green') $('red').checked=false;
+if (typeof L === 'undefined') {
+  $('message').textContent='Leaflet inaccessible : vérifie la connexion Internet.';
+  throw new Error('Leaflet absent');
+}
+const map = L.map('map',{preferCanvas:true,zoomControl:true}).setView([29.77,-95.36],12);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
+L.tileLayer('https://tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png',{maxZoom:19,opacity:.85,attribution:'© OpenRailwayMap'}).addTo(map);
+const layers={red:L.layerGroup().addTo(map),green:L.layerGroup().addTo(map)};
+const colors={red:'#d73245',green:'#099957'};
+
+// No coordinates in the HTML: all switch positions are read from the CSV.
+function parseCSV(csv) {
+  const rows=csv.trim().replace(/^\uFEFF/,'').split(/\r?\n/);
+  if(!rows.length || rows[0].replace(/\"/g,'').trim()!=='OSM_ID,Latitude,Longitude') throw new Error('Format CSV inattendu');
+  return rows.slice(1).filter(r=>r.trim()).map((r)=>{
+    const fields=r.split(',').map(v=>v.trim().replace(/^\"|\"$/g,''));
+    const [id,latRaw,lonRaw]=fields;
+    const lat=Number(latRaw),lon=Number(lonRaw);
+    if(!/^\d+$/.test(id)||!Number.isFinite(lat)||!Number.isFinite(lon)) throw new Error('CSV avec ligne invalide: '+r);
+    return {id,lat,lon};
+  });
+}
+async function readLine(line) {
+  const response=await fetch(`data/switches_${line}.csv?t=${Date.now()}`,{cache:'no-store'});
+  if(!response.ok) throw new Error(`CSV ${line} absent (HTTP ${response.status})`);
+  return parseCSV(await response.text());
+}
+function draw(line){
+  layers[line].clearLayers();
+  state[line].forEach((p,i)=>{
+    const n=i+1;
+    const icon=L.divIcon({className:'',html:`<div class="dot" style="background:${colors[line]}">${n}</div>`,iconSize:[29,29],iconAnchor:[14,14]});
+    const marker=L.marker([p.lat,p.lon],{icon});
+    marker.bindPopup(`<b>${line==='red'?'Red':'Green'} Line — Switch ${n}</b><br>OSM ID : ${p.id}<br>Latitude : ${p.lat}<br>Longitude : ${p.lon}<br><a href="https://www.openstreetmap.org/node/${p.id}" target="_blank" rel="noopener">Ouvrir sur OpenStreetMap</a>`);
+    marker.addTo(layers[line]);
+  });
+  $(`${line}Count`).textContent=state[line].length;
+}
+function applySelection(){
+  for(const line of ['red','green']){
+    const show=$(line).checked;
+    if(show&&!map.hasLayer(layers[line])) layers[line].addTo(map);
+    if(!show&&map.hasLayer(layers[line])) map.removeLayer(layers[line]);
+  }
+  const count=( $('red').checked?state.red.length:0)+($('green').checked?state.green.length:0);
+  $('message').textContent=`${count} switches affichés`;
+}
+function fit(){
+  const points=[];
+  for(const line of ['red','green'])if($(line).checked) state[line].forEach(p=>points.push([p.lat,p.lon]));
+  if(points.length)map.fitBounds(L.latLngBounds(points).pad(.1),{maxZoom:17});
+  setTimeout(()=>map.invalidateSize(),150);
+}
+async function loadAll(){
+  $('reload').disabled=true;
+  const errors=[];
+  for(const line of ['red','green']) {
+    try{state[line]=await readLine(line); draw(line)}
+    catch(err){state[line]=[];draw(line); errors.push(err.message)}
+  }
+  applySelection();fit();
+  if(errors.length) $('message').textContent='Attention : '+errors.join(' ; ');
+  $('reload').disabled=false;
+}
+$('red').addEventListener('change',()=>{applySelection();fit()});
+$('green').addEventListener('change',()=>{applySelection();fit()});
+$('fit').addEventListener('click',fit);
+$('reload').addEventListener('click',loadAll);
+$('refresh').addEventListener('click',async()=>{
+  $('refresh').disabled=true;
+  $('message').textContent='Téléchargement depuis OpenStreetMap (peut prendre du temps)…';
+  try{
+    const res=await fetch('/api/refresh',{method:'POST',cache:'no-store'});
+    if(!res.ok)throw new Error(`Serveur HTTP ${res.status}`);
+    const data=await res.json();
+    await loadAll();
+    const failures=Object.entries(data.results).filter(([,r])=>!r.ok).map(([line])=>line);
+    if(failures.length)$('message').textContent=`OSM indisponible pour ${failures.join(', ')}. Dernier CSV conservé si présent.`;
+  }catch(err){ $('message').textContent='Erreur mise à jour : '+err.message; }
+  finally{$('refresh').disabled=false}
+});
+loadAll();
+window.addEventListener('resize',()=>map.invalidateSize());
+</script>
+</body>
+</html>
